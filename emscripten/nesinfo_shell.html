@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <title>NES Header Information</title>
+    <style>
+    html {
+      font-family: sans-serif;
+    }
+    .emscripten { padding-right: 0; margin-left: auto; margin-right: auto; display: block; }
+    textarea.emscripten { font-family: monospace; width: 80%; }
+    div.emscripten { text-align: center; }
+
+    .rom {
+      background-color: #B1C7EA;
+      padding: 5px 10px;
+      border-radius: 5px;
+      border: 1px ridge black;
+      font-size: 0.8rem;
+      height: auto;
+    }
+
+    .rom:hover {
+      background-color: #2D5BA3;
+      color: white;
+    }
+
+    .rom:active {
+      background-color: #0D3F8F;
+      color: white;
+    }
+
+    .rom:disabled {
+      background-color: #cacaca;
+      color: rgb(0, 0, 0);
+    }
+
+    #dropzone {
+      position: fixed;
+      left: 0px;
+      top: 0px;
+      z-index: 666;
+      width: 100%;
+      height: 100%;
+      background-color: rgb(0, 128, 192);
+      opacity: 0.5;
+      display: none;
+    }
+    </style>
+  </head>
+  <body>
+    <div style="margin: 8px;">
+      <label for="file" class="rom">Open ROM</label>
+      <input type="file" id="file" onchange="onChange(event)" accept=".nes" style="width: 0px; opacity: 0;"><!--
+   --><span id="romname"></span>
+    </div>
+
+    <pre style="font-family: monospace, monospace; margin: 8px;" id="rominfo">Drag and drop a ROM</pre>
+
+    <div class="emscripten" id="status">Downloading...</div>
+    <div class="emscripten">
+      <progress value="0" max="100" id="progress" hidden=1></progress>
+    </div>
+    <!--<textarea class="emscripten" id="output" rows="8"></textarea>-->
+    <script type='text/javascript'>
+      var statusElement = document.getElementById('status');
+      var progressElement = document.getElementById('progress');
+
+      var Module = {
+        preRun: [],
+        postRun: [],
+        print: (function() {
+          var element = document.getElementById('output');
+          if (element) element.value = ''; // clear browser cache
+          return function(text) {
+            if (arguments.length > 1) text = Array.prototype.slice.call(arguments).join(' ');
+            // These replacements are necessary if you render to raw HTML
+            //text = text.replace(/&/g, "&amp;");
+            //text = text.replace(/</g, "&lt;");
+            //text = text.replace(/>/g, "&gt;");
+            //text = text.replace('\n', '<br>', 'g');
+            console.log(text);
+            if (element) {
+              element.value += text + "\n";
+              element.scrollTop = element.scrollHeight; // focus on bottom
+            }
+          };
+        })(),
+        setStatus: function(text) {
+          if (!Module.setStatus.last) Module.setStatus.last = { time: Date.now(), text: '' };
+          if (text === Module.setStatus.last.text) return;
+          var m = text.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
+          var now = Date.now();
+          if (m && now - Module.setStatus.last.time < 30) return; // if this is a progress update, skip it if too soon
+          Module.setStatus.last.time = now;
+          Module.setStatus.last.text = text;
+          if (m) {
+            text = m[1];
+            progressElement.value = parseInt(m[2])*100;
+            progressElement.max = parseInt(m[4])*100;
+            progressElement.hidden = false;
+          } else {
+            progressElement.value = null;
+            progressElement.max = null;
+            progressElement.hidden = true;
+          }
+          statusElement.innerHTML = text;
+        },
+        totalDependencies: 0,
+        monitorRunDependencies: function(left) {
+          this.totalDependencies = Math.max(this.totalDependencies, left);
+          Module.setStatus(left ? 'Preparing... (' + (this.totalDependencies-left) + '/' + this.totalDependencies + ')' : 'All downloads complete.');
+        }
+      };
+      Module.setStatus('Downloading...');
+      window.onerror = function() {
+        Module.setStatus('Exception thrown, see JavaScript console');
+        Module.setStatus = function(text) {
+          if (text) Module.printErr('[post-exception status] ' + text);
+        };
+      };
+    </script>
+    {{{ SCRIPT }}}
+
+    <div id="dropzone"></div>
+
+    <script>
+'use strict';
+const romNameElement = document.getElementById("romname");
+const romInfoElement = document.getElementById("rominfo");
+
+function onChange(event) {
+  handleFiles(event.target.files);
+}
+function handleFiles(files) {
+  let file = files[0];
+  let reader = new FileReader();
+  reader.onload = function(event) {
+    romNameElement.textContent = file.name;
+    romInfoElement.textContent = "";
+
+    let arr = new Uint8Array(event.target.result);
+    if (arr.byteLength < 16) {
+        romInfoElement.textContent = "Error: file size is too small";
+        return;
+    }
+    if (arr[0] !== 0x4E || arr[1] !== 0x45 || arr[2] !== 0x53 || arr[3] !== 0x1A) {
+        romInfoElement.textContent = "Error: file is not an iNES ROM image";
+        return;
+    }
+    let buffer = Module._malloc(arr.byteLength);
+    Module.HEAPU8.set(arr, buffer); // == Module.writeArrayToMemory()
+    Module.ccall('PrintNESInfo', null, ['number', 'number'], [buffer, arr.byteLength]);
+    Module._free(buffer);
+    // Stack. For small files
+    //let arr = new Uint8Array(event.target.result);
+    //Module.ccall('PrintNESInfo', null, ['array', 'number'], [arr, arr.length]);
+  };
+  reader.readAsArrayBuffer(file);
+}
+const dropzone = document.getElementById("dropzone");
+window.addEventListener("dragover", dragover, false);
+dropzone.addEventListener("dragleave", dragleave, false);
+dropzone.addEventListener("drop", drop, false);
+function dragover(e) {
+  e.stopPropagation();
+  e.preventDefault();
+  if (e.target.id !== "dropzone") {
+    dropzone.style.display = "block";
+  }
+}
+function dragleave(e) {
+  e.stopPropagation();
+  e.preventDefault();
+  if (e.target.id === "dropzone") {
+    dropzone.style.display = "none";
+  }
+}
+function drop(e) {
+  e.stopPropagation();
+  e.preventDefault();
+  dropzone.style.display = "none";
+  handleFiles(e.dataTransfer.files);
+}
+    </script>
+  </body>
+</html>
